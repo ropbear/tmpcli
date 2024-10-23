@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
 import argparse
-from src.logger import Logger
-from src.client import TmpClient
+import logging
+from src.tmpclient import TmpClient
 
 def handle_args():
     """
@@ -39,23 +39,10 @@ def handle_args():
             default=2,
         )
     parser.add_argument(
-            "-T","--packet-type",
-            dest="packet_type",
-            help="""Toggle TDP or OneMesh""",
-            default="1",
-        )
-    parser.add_argument(
             "-o","--opcode",
             dest="opcode",
-            help="""TMP/TDP opcode""",
+            help="""TMP opcode""",
             default="0",
-        )
-    parser.add_argument(
-            "-t","--tdp",
-            dest="use_tdp",
-            action="store_true",
-            help="""Send payload over TDP instead of TMP""",
-            default=False,
         )
     parser.add_argument(
             "-v","--verbose",
@@ -73,22 +60,17 @@ def main():
     args = handle_args()
 
     # determine log level
-    logger = Logger(verbosity=4)
-    logger.verbosity = 4 if args.verbose else 0
+    logging.basicConfig(
+        level = (logging.DEBUG if args.verbose else logging.INFO)
+    )
 
-    # logger up TMP Client
-    logger.log("TMPCLI","INFO","Creating TMP Client")
     client = TmpClient(
-                args.server, args.port, logger,
-                args.business_type, args.version,
+                args.server,
+                args.port,
+                args.business_type,
+                args.version,
             )
-    if args.use_tdp:
-        client.use_tdp = True
-    logger.log("TMPCLI","INFO","Sending payload")
-    if args.use_tdp:
-        client.send(args.opcode, args.payload, args.packet_type)
-    else:
-        client.send(args.opcode, args.payload)
+    client.send(int(args.opcode,16), bytes(args.payload,'utf-8'))
 
 if __name__ == "__main__":
     main()

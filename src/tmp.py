@@ -1,64 +1,84 @@
 import binascii
 import struct
+import logging
+from enum import Enum
 
-class TmpPacket:
+MAXSIZE = 0x400
+HDR_SZ = 0x18
+DATA_SZ = MAXSIZE - HDR_SZ
+
+PKT_REQ         = 1
+PKT_RSP         = 2
+PKT_PUSH_ACK    = 3
+PKT_PULL        = 4
+PKT_DATA        = 5
+PKT_PUSH        = None
+PKT_PULL_ACK    = None
+
+
+# the following diagram is 32 bits wide
+"""
+ 0                   1                   2                   3  
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|       1       |       V       |              typ              |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|              len              |              flg              |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                             serial                            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                             chksum                            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|       B       |               op              |      pad      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|               |                                               |
++-+-+-+-+-+-+-+-+                                               +
+|                              data                             |
++                                                               +
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+"""
+
+def checksum(header, payload):
     """
-    A class to house the structure and functionality of a TMP/TDP packet.
+    Calculate the CRC32 checksum of a packet
+    """
+    crc32 = binascii.crc32(header + payload)
+    return struct.pack('!L', crc32)
 
-    `opcode[int]`: The opcode to send.
-
-    `data[str]`: Data to send.
+class TMPPacket:
+    """
+    A class to house the structure and functionality of a Tether Management Protocol (TMP) packet.
     """
 
-    MAXSIZE = 0x400
-    HDR_SZ = 0x10
-    DATA_SZ = MAXSIZE - HDR_SZ
+    def __init__(
+        self, opcode=0, data=b"", serial=0xdeadbeef,
+        packet_type=PKT_REQ, flags=0, version=0, business_type=2
+    ):
+        self.opcode         = opcode
+        self.data           = data
+        self.serial         = serial
+        self.packet_type    = packet_type
+        self.flags          = flags
+        self.version        = version
+        self.btype          = business_type
 
-    TYPE_REQ = 1
-    TYPE_RSP = 2
-    TYPE_DAT = 5
+        self.packet = self.__construct()
 
-    def __init__(self, logger, opcode=0, data=""):
-        self.opcode = opcode
-        self.data = data
-        self.serial = 0xdeadbeef
+    def __repr__(self) -> str:
+        pass
 
-        self.logger = logger
 
-        # placeholders
-        self.header = b""
-        self.checksum = b""
-        self.payload = b""
-        self.packet_type = self.TYPE_REQ
-        self.flags = 0 # flags set manually due to infrequent use
-        self.version = 0
-        self.btype = 2
 
-    def __checksum(self):
-        """
-        Calculate the checksum of the packet.
-
-        Returns: None (sets checksum attribute)
-        """
-        crc32 = binascii.crc32(self.header + self.payload)
-        self.checksum = struct.pack('!L', crc32)
-        if self.packet_type == self.TYPE_DAT:
-            # only add the checksum if it's a data packet
-            self.header = self.header[:12] + self.checksum + self.header[16:]
-
-    def __header(self):
-        """
-        Determine the packet header bytes.
-
-        Returns: None (creates header attribute).
-        """
+    def __construct(self):
         header = struct.pack("B", 1) # always 1
         header += struct.pack("B", self.version)
         header += struct.pack("<H", self.packet_type)
-        if self.packet_type != self.TYPE_DAT:
+        if self.packet_type != PKT_DATA:
             # REQ and RSP packet types are only 4 bytes
-            self.header = header
-            return
+            return header
+
+        # building data packet
         header += struct.pack("!H", 8+len(self.data)) # from after checksum
         header += struct.pack("<H", self.flags)
         header += struct.pack("!L", self.serial)
@@ -67,42 +87,13 @@ class TmpPacket:
         header += struct.pack("!B", 1) # always 1
         header += struct.pack("!H", self.opcode)
         header += struct.pack("!L", 0) # some padding maybe?
-        self.header = header
 
-    def __payload(self):
-        """
-        Prepare the data for transmission as payload
+        crc = checksum(header, self.data)
 
-        Returns: None (creates payload attribute)
-        """
-        if self.packet_type == self.TYPE_DAT:
-            # only add the payload if it's a data packet
-            self.payload = bytes(self.data, 'utf-8')
+        if self.data is not None:
+            # only add the checksum if it's a data packet
+            header = header[:12] + crc + header[16:]
+            logging.debug(f"Packet checksum {binascii.hexlify(crc)}")
+            return header + self.data
         else:
-            self.payload = bytes("", 'utf-8')
-
-    def build(self, packet_type=TYPE_REQ, version=0, business_type=2):
-        """
-        Construct the packet.
-
-        `version[int]`: The TMP version to use
-
-        `packet_type[int]`: The type of packet to send.
-
-        `business_type[int]`: Sets some flag in the header that changes flow.
-
-        Returns: Packet bytes
-        """
-        self.packet_type = packet_type
-        self.version = version
-        self.btype = business_type
-        self.__header()
-        self.__payload()
-        self.__checksum()
-
-        self.logger.log("TMP_PACKET","INFO","Checksum %s" %
-                    binascii.hexlify(self.checksum)
-                )
-
-        packet_bytes = self.header + self.payload
-        return packet_bytes
+            return header
