@@ -1,25 +1,22 @@
 import socket
 import logging
 import src.tmp as tmp
+from src.util import pp
 
 RECVBUF_SIZE = 4096
 
-class TmpClient:
+class TMPClient:
     """
     A client to interface with the TMP server running on TP-Link routers.
 
     :param str host:              Server where tmpServer is running (TP-Link router)
     :param int port:                Port which tmpServer is running (20002)
-    :param logging.Logger logger:   Logger instance
-    :param int business_type:       Flag that changes logic flow
-    :param int version:             tmpServer version
     """
 
-    def __init__(self, host, port, business_type=2, version=1):
-        self.btype      = business_type
-        self.version    = version
-        self.host     = host
+    def __init__(self, host, port):
+        self.host       = host
         self.port       = int(port)
+        self.sock       = self.__create_socket()
 
 
     def __create_socket(self):
@@ -34,33 +31,39 @@ class TmpClient:
         return sock
 
 
-    def __do_handshake(self, sock):
+    def assoc(self):
         """
-        Handle initial connection handshake with TMP/TDP server
-
-        :param socket.socket sock:
+        Handle initial connection handshake with the TMP server
         """
-        sock.sendall(
-            tmp.TMPPacket(
-                packet_type     = tmp.PKT_REQ,
-                business_type   = self.btype,
-                version         = self.version
-            ).packet
-        )
+        req = tmp.TMPPacket().pack(packet_type=tmp.PKT_REQ)
+        self.sock.sendall(req)
+        logging.debug(f"Sent req:\n{pp(req)}")
 
-        logging.debug("Request sent...")
+        recv = self.sock.recv(RECVBUF_SIZE)
+        logging.debug(f"Received rsp:\n{pp(recv)}")
 
-        recv = sock.recv(RECVBUF_SIZE)
-        logging.debug(f"Received {recv}")
+        rsp = tmp.TMPPacket().pack(packet_type=tmp.PKT_RSP)
+        self.sock.sendall(rsp)
 
-        sock.sendall(
-            tmp.TMPPacket(
-                packet_type     = tmp.PKT_RSP,
-                business_type   = self.btype,
-                version         = self.version
-            ).packet
-        )
-        logging.debug("Response sent.")
+        logging.debug(f"Sent rsp:\n{pp(rsp)}")
+
+
+    def hello(self):
+        """
+        Send a "hello" packet
+        """
+        pkt = tmp.TMPPacket().pack(packet_type=tmp.PKT_HELLO)
+        self.sock.sendall(pkt)
+        logging.debug(f"Sent hello:\n{pp(pkt)}")
+
+
+    def bye(self):
+        """
+        Send a "bye" packet
+        """
+        pkt = tmp.TMPPacket().pack(packet_type=tmp.PKT_BYE)
+        self.sock.sendall(pkt)
+        logging.debug(f"Sent bye:\n{pp(pkt)}")
 
 
     def send(self, opcode, data):
@@ -71,29 +74,48 @@ class TmpClient:
         :param str data:        The data to send
         :return:                Boolean success
         """
-        sock = self.__create_socket()
-        self.__do_handshake(sock)
 
-        sock.sendall(
-            tmp.TMPPacket(
+        pkt = tmp.TMPPacket().pack(
                 opcode          = opcode,
                 data            = data,
                 packet_type     = tmp.PKT_DATA,
-                business_type   = self.btype,
-                version         = self.version
-            ).packet
-        )
-        logging.info(f"sent packet with opcode {hex(opcode)}")
+                ver_minor       = 0,
+                flags           = 0,
+                service_type    = 1,
+                service_version = 1,
+                reason_code     = 0,
+                token           = 0,
+                serial          = 0
+            )
+        self.sock.sendall(pkt)
+        logging.debug(f"Sent pkt:\n{pp(pkt)}")
 
 
-        #TODO build recv func
+    def recv(self):
+        """
+        Receive data from the socket, unpack it
+
+        :return: pkt.data
+        """
+        #TODO add timeout
         data = b""
-        recv = sock.recv(RECVBUF_SIZE)
-        data += recv
-        while recv == RECVBUF_SIZE:
-            recv = sock.recv(RECVBUF_SIZE)
+        while True:
+            recv = self.sock.recv(RECVBUF_SIZE)
             data += recv
+            if len(recv) < RECVBUF_SIZE:
+                break
 
-        logging.info("recieved %s" % data)
-        return True
+        pkt = tmp.TMPPacket()
+        pkt.unpack(data)
+        logging.debug(f"Received pkt:\n{pp(pkt.data)}")
+        return pkt.data
+
+
+    def close(self):
+        """
+        Closes the socket
+
+        :return: return value of socket.close()
+        """
+        return self.sock.close()
 

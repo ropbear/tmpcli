@@ -2,41 +2,32 @@
 
 import argparse
 import logging
-from src.tmpclient import TmpClient
+import binascii
+from src.tmpclient import TMPClient
+from src.tmp import HDR_SZ, CTRL_SZ
 
 def handle_args():
     """
     A wrapper for the command line argument handling.
 
-    Return: Argparse object with parsed arguments
+    :return: args object
+    :rtype: Namespace
     """
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-            "server",
-            help="""Server IP""",
+            "host",
+            help="""Host IPv4""",
         )
     parser.add_argument(
             "port",
-            help="""Server port""",
+            help="""TCP port""",
             default=20002,
         )
     parser.add_argument(
             "-p","--payload",
-            help="""Payload to send""",
+            help="""Data to send""",
             default="",
-        )
-    parser.add_argument(
-            "-V","--version",
-            dest="version",
-            help="""TMP version""",
-            default=0,
-        )
-    parser.add_argument(
-            "-B","--business-type",
-            dest="business_type",
-            help="""Who knows what this is, @tplink""",
-            default=2,
         )
     parser.add_argument(
             "-o","--opcode",
@@ -64,13 +55,24 @@ def main():
         level = (logging.DEBUG if args.verbose else logging.INFO)
     )
 
-    client = TmpClient(
-                args.server,
-                args.port,
-                args.business_type,
-                args.version,
+    client = TMPClient(
+                args.host,
+                args.port
             )
-    client.send(int(args.opcode,16), bytes(args.payload,'utf-8'))
+
+    ## example client session ##
+    client.assoc()
+    client.hello()
+    pkt = client.recv()
+    client.send(
+        int(args.opcode,16),
+        bytes(args.payload,'utf-8')
+    )
+    pkt = client.recv()
+    print(pkt[HDR_SZ+CTRL_SZ:].decode())
+    client.bye()
+    pkt = client.recv()
+    client.close()
 
 if __name__ == "__main__":
     main()
